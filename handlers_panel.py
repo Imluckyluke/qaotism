@@ -180,13 +180,29 @@ async def handle_admin_id_text(update: Update, context: ContextTypes.DEFAULT_TYP
     msg = update.message
     new_id = None
     username = None
-    if msg.forward_from:
-        new_id = msg.forward_from.id
-        username = msg.forward_from.username
+
+    # Bot API 7.0+ replaced forward_from with forward_origin; support both
+    # so this works regardless of the installed python-telegram-bot version.
+    forward_user = None
+    origin = getattr(msg, "forward_origin", None)
+    if origin is not None and getattr(origin, "sender_user", None) is not None:
+        forward_user = origin.sender_user
+    else:
+        forward_user = getattr(msg, "forward_from", None)
+
+    if forward_user:
+        new_id = forward_user.id
+        username = forward_user.username
     elif msg.text and msg.text.strip().lstrip("-").isdigit():
         new_id = int(msg.text.strip())
     else:
-        await msg.reply_text("یه آی‌دی عددی معتبر بفرست یا یه پیام فوروارد کن.")
+        if origin is not None:
+            await msg.reply_text(
+                "این پیام فوروارد شده ولی حریم خصوصی فرستنده اصلی مخفیه، نمی‌تونم آی‌دیش رو بگیرم.\n"
+                "یه آی‌دی عددی معتبر بفرست."
+            )
+        else:
+            await msg.reply_text("یه آی‌دی عددی معتبر بفرست یا یه پیام از اون کاربر برام فوروارد کن.")
         return True
 
     ok = db.add_admin(new_id, username, uid)
