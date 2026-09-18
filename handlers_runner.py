@@ -37,13 +37,27 @@ async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     await iq.answer(results, cache_time=1)
 
 
-def _fmt_name(user):
-    if user.username:
-        return f"@{user.username}"
-    return user.full_name or str(user.id)
+async def _edit_session_message(context, session, text, reply_markup=None):
+    """Edits the quiz message whether it's a normal group message or one
+    sent via an inline query result (which only has an inline_message_id)."""
+    if session["inline_message_id"]:
+        await context.bot.edit_message_text(
+            inline_message_id=session["inline_message_id"],
+            text=text,
+            reply_markup=reply_markup,
+        )
+    else:
+        await context.bot.edit_message_text(
+            chat_id=session["chat_id"],
+            message_id=session["message_id"],
+            text=text,
+            reply_markup=reply_markup,
+        )
 
 
-async def _send_question(context, chat_id, message_id, session_id, quiz_id, q_index):
+async def _send_question(context, session, q_index):
+    session_id = session["id"]
+    quiz_id = session["quiz_id"]
     questions = db.get_questions(quiz_id)
     total = len(questions)
     qdata = questions[q_index]
@@ -53,11 +67,8 @@ async def _send_question(context, chat_id, message_id, session_id, quiz_id, q_in
         f"👥 {db.count_participants(session_id)} نفر شرکت کننده — "
         f"{db.count_answers(session_id, qdata['id'])} نفر جواب دادن"
     )
-    await context.bot.edit_message_text(
-        chat_id=chat_id,
-        message_id=message_id,
-        text=text,
-        reply_markup=kb.question_kb(session_id, q_index, qdata["options"]),
+    await _edit_session_message(
+        context, session, text, kb.question_kb(session_id, q_index, qdata["options"])
     )
 
 
@@ -72,8 +83,11 @@ def _build_leaderboard_section(session_id, total_questions):
         return "\n".join(lines)
     for i, p in enumerate(board):
         label = p["username"] and f"@{p['username']}" or (p["full_name"] or str(p["user_id"]))
-        rank = _MEDALS.get(i, f"{i+1}.")
-        lines.append(f"{rank} {label} — {p['score']} از {total_questions} درست")
+        if i == 0:
+            lines.append(f"🥇 اوتیسمی کیری خفن: {label} — {p['score']} از {total_questions} درست")
+        else:
+            rank = _MEDALS.get(i, f"{i+1}.")
+            lines.append(f"{rank} {label} — {p['score']} از {total_questions} درست")
     return "\n".join(lines)
 
 
@@ -105,11 +119,21 @@ def _build_final_report(quiz, questions, session_id):
     return "\n".join(lines)
 
 
-async def _finish_quiz(context, chat_id, message_id, session_id, quiz_id):
+async def _finish_quiz(context, session):
+    session_id = session["id"]
+    quiz_id = session["quiz_id"]
     quiz = db.get_quiz(quiz_id)
     questions = db.get_questions(quiz_id)
     db.set_session_status(session_id, "finished")
     report = _build_final_report(quiz, questions, session_id)
+
+    if session["inline_message_id"]:
+        # Inline-sent messages have no known chat_id, so extra messages
+        # can't be sent to the chat -- truncate to fit a single message.
+        if len(report) > 4000:
+            report = report[:3950] + "\n\n… (نتیجه طولانی بود و خلاصه شد)"
+        await _edit_session_message(context, session, report)
+        return
 
     # Telegram messages are capped at 4096 chars; split if needed.
     chunks = []
@@ -123,24 +147,22 @@ async def _finish_quiz(context, chat_id, message_id, session_id, quiz_id):
         chunks.append(cur)
 
     await context.bot.edit_message_text(
-        chat_id=chat_id, message_id=message_id, text=chunks[0]
+        chat_id=session["chat_id"], message_id=session["message_id"], text=chunks[0]
     )
     for extra in chunks[1:]:
-        await context.bot.send_message(chat_id=chat_id, text=extra)
+        await context.bot.send_message(chat_id=session["chat_id"], text=extra)
 
 
 async def _advance(context, session):
     session_id = session["id"]
-    chat_id = session["chat_id"]
-    message_id = session["message_id"]
     quiz_id = session["quiz_id"]
     next_index = session["current_index"] + 1
     questions = db.get_questions(quiz_id)
     if next_index >= len(questions):
-        await _finish_quiz(context, chat_id, message_id, session_id, quiz_id)
+        await _finish_quiz(context, session)
     else:
         db.set_session_index(session_id, next_index)
-        await _send_question(context, chat_id, message_id, session_id, quiz_id, next_index)
+        await _send_question(context, db.get_session(session_id), next_index)
 
 
 async def session_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -159,9 +181,18 @@ async def session_callback_router(update: Update, context: ContextTypes.DEFAULT_
         if not quiz:
             await q.answer("این آزمون دیگه وجود نداره.", show_alert=True)
             return True
-        chat_id = q.message.chat.id
-        session_id = db.create_session(quiz_id, chat_id, user.id)
-        db.set_session_message(session_id, q.message.message_id)
+
+        if q.message is not None:
+            # normal message (e.g. sent directly in the group)
+            session_id = db.create_session(
+                quiz_id, user.id, chat_id=q.message.chat.id, message_id=q.message.message_id
+            )
+        else:
+            # message sent via inline query result -> only inline_message_id is known
+            session_id = db.create_session(
+                quiz_id, user.id, inline_message_id=q.inline_message_id
+            )
+
         await q.answer()
         await q.edit_message_text(
             f"🎯 آزمون: {quiz['name']}\n\n"
@@ -210,9 +241,7 @@ async def session_callback_router(update: Update, context: ContextTypes.DEFAULT_
         db.set_session_status(session_id, "running")
         db.set_session_index(session_id, 0)
         await q.answer("آزمون شروع شد 🚀")
-        await _send_question(
-            context, session["chat_id"], session["message_id"], session_id, session["quiz_id"], 0
-        )
+        await _send_question(context, db.get_session(session_id), 0)
         return True
 
     if data.startswith("a:"):
@@ -237,9 +266,7 @@ async def session_callback_router(update: Update, context: ContextTypes.DEFAULT_
         await q.answer("جوابت ثبت شد ✅ (تا آخر آزمون به کسی نشون داده نمیشه)", show_alert=True)
 
         # update visible answered-count without revealing choices
-        await _send_question(
-            context, session["chat_id"], session["message_id"], session_id, session["quiz_id"], q_index
-        )
+        await _send_question(context, session, q_index)
 
         if db.count_answers(session_id, qdata["id"]) >= db.count_participants(session_id):
             await _advance(context, db.get_session(session_id))

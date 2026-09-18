@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     status TEXT NOT NULL DEFAULT 'joining',
     current_index INTEGER NOT NULL DEFAULT 0,
     started_by INTEGER,
+    inline_message_id TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -215,11 +216,18 @@ def get_question(question_id: int):
 
 # ---------------- Sessions ----------------
 
-def create_session(quiz_id: int, chat_id: int, started_by: int) -> int:
+def create_session(
+    quiz_id: int,
+    started_by: int,
+    chat_id: int = None,
+    message_id: int = None,
+    inline_message_id: str = None,
+) -> int:
     with get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO sessions (quiz_id, chat_id, started_by) VALUES (?,?,?)",
-            (quiz_id, chat_id, started_by),
+            """INSERT INTO sessions (quiz_id, chat_id, message_id, started_by, inline_message_id)
+               VALUES (?,?,?,?,?)""",
+            (quiz_id, chat_id, message_id, started_by, inline_message_id),
         )
         return cur.lastrowid
 

@@ -23,6 +23,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.error("خطا در پردازش آپدیت", exc_info=context.error)
+    if isinstance(update, Update) and update.callback_query:
+        try:
+            await update.callback_query.answer("یه خطای غیرمنتظره پیش اومد، دوباره امتحان کن.", show_alert=True)
+        except Exception:
+            pass
+
+
 async def callback_query_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = update.callback_query.data
 
@@ -79,6 +88,8 @@ def build_app():
             builder.handle_text_router,
         )
     )
+
+    app.add_error_handler(error_handler)
 
     return app
 

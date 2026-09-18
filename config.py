@@ -10,4 +10,4 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "autisma.db"))
 
 # اسمی که برای صدا زدن اعضای گروه استفاده میشه
-MEMBERS_CALL_NAME = "اوتیسما"
+MEMBERS_CALL_NAME = "اوتیسمی‌های گل"
