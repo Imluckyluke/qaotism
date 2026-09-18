@@ -3,7 +3,7 @@ from telegram.ext import ContextTypes
 
 import database as db
 import keyboards as kb
-from config import MEMBERS_CALL_NAME
+from config import MEMBERS_CALL_NAME, PANEL_TITLE
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -30,7 +30,7 @@ async def panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     context.user_data.clear()
     await update.message.reply_text(
-        "🎛 پنل مدیریت آزمون اوتیسما", reply_markup=kb.main_panel_kb(db.is_owner(uid))
+        PANEL_TITLE, reply_markup=kb.main_panel_kb(db.is_owner(uid))
     )
 
 
@@ -74,7 +74,7 @@ async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         await q.answer()
         await q.edit_message_text(
-            "🎛 پنل مدیریت آزمون اوتیسما", reply_markup=kb.main_panel_kb(db.is_owner(uid))
+            PANEL_TITLE, reply_markup=kb.main_panel_kb(db.is_owner(uid))
         )
         return
 
@@ -211,5 +211,5 @@ async def handle_admin_id_text(update: Update, context: ContextTypes.DEFAULT_TYP
         await msg.reply_text(f"✅ کاربر {new_id} به عنوان ادمین اضافه شد.")
     else:
         await msg.reply_text("این کاربر از قبل ادمین بود.")
-    await msg.reply_text("🎛 پنل مدیریت آزمون اوتیسما", reply_markup=kb.main_panel_kb(True))
+    await msg.reply_text(PANEL_TITLE, reply_markup=kb.main_panel_kb(True))
     return True

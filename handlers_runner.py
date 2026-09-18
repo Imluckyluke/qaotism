@@ -74,49 +74,63 @@ async def _send_question(context, session, q_index):
 
 _MEDALS = {0: "🥇", 1: "🥈", 2: "🥉"}
 
+# کاراکترهای کنترل جهت متن (Unicode bidi) برای اینکه آی‌دی انگلیسی
+# وسط جمله‌ی فارسی باعث بهم‌ریختگی چیدمان نشه.
+RLM = "\u200f"   # شروع خط با جهت راست‌به‌چپ
+FSI = "\u2068"   # ایزوله‌کردن اسم (جهتش خودکار تشخیص داده میشه)
+PDI = "\u2069"   # پایان ایزوله
+SEP = "━━━━━━━━━━━━━━"
+
+
+def _user_label(row):
+    """اسم/آی‌دی کاربر، ایزوله‌شده تا با متن فارسی قاطی نشه."""
+    label = row["username"] and f"@{row['username']}" or (row["full_name"] or str(row["user_id"]))
+    return f"{FSI}{label}{PDI}"
+
 
 def _build_leaderboard_section(session_id, total_questions):
     board = db.get_leaderboard(session_id)
-    lines = ["🏆 رتبه‌بندی نهایی:"]
+    lines = [f"{RLM}🏆 رتبه‌بندی نهایی", SEP]
     if not board:
-        lines.append("کسی شرکت نکرد.")
+        lines.append(f"{RLM}کسی شرکت نکرد.")
         return "\n".join(lines)
     for i, p in enumerate(board):
-        label = p["username"] and f"@{p['username']}" or (p["full_name"] or str(p["user_id"]))
-        if i == 0:
-            lines.append(f"🥇 اوتیسمی کیری خفن: {label} — {p['score']} از {total_questions} درست")
-        else:
-            rank = _MEDALS.get(i, f"{i+1}.")
-            lines.append(f"{rank} {label} — {p['score']} از {total_questions} درست")
+        rank = _MEDALS.get(i, f"{i+1}.")
+        title = "اوتیسمی کیری خفن: " if i == 0 else ""
+        lines.append(
+            f"{RLM}{rank} {title}{_user_label(p)}{RLM} — {p['score']} از {total_questions} درست"
+        )
     return "\n".join(lines)
 
 
 def _build_final_report(quiz, questions, session_id):
-    lines = [f"🏁 نتایج آزمون: {quiz['name']}\n"]
-    lines.append(_build_leaderboard_section(session_id, len(questions)))
-    lines.append("")
     total_participants = db.count_participants(session_id)
+    lines = [
+        f"{RLM}🏁 نتایج آزمون: {quiz['name']}",
+        f"{RLM}👥 شرکت‌کننده‌ها: {total_participants} نفر",
+        "",
+        _build_leaderboard_section(session_id, len(questions)),
+        "",
+        f"{RLM}📊 آمار سوال‌ها",
+        SEP,
+    ]
     for i, qdata in enumerate(questions, 1):
-        lines.append(f"—————————")
-        lines.append(f"سوال {i}: {qdata['text']}")
         answers = db.get_answers_for_question(session_id, qdata["id"])
-        by_option = {j: [] for j in range(len(qdata["options"]))}
+        counts = {j: 0 for j in range(len(qdata["options"]))}
         for a in answers:
-            by_option.setdefault(a["option_index"], []).append(
-                a["username"] and f"@{a['username']}" or (a["full_name"] or str(a["user_id"]))
-            )
-        answered_count = len(answers)
+            counts[a["option_index"]] = counts.get(a["option_index"], 0) + 1
+
+        lines.append(f"{RLM}❓ سوال {i}: {qdata['text']}")
         for j, opt in enumerate(qdata["options"]):
-            names = by_option.get(j, [])
-            pct = (len(names) / total_participants * 100) if total_participants else 0
-            mark = " ✅" if j == qdata["correct_option"] else ""
-            names_str = "، ".join(names) if names else "—"
-            lines.append(f"{j+1}) {opt}{mark} — {pct:.0f}% ({len(names)} نفر): {names_str}")
-        not_answered = total_participants - answered_count
+            n = counts.get(j, 0)
+            pct = (n / total_participants * 100) if total_participants else 0
+            icon = "✅" if j == qdata["correct_option"] else "▫️"
+            lines.append(f"{RLM}{icon} {j+1}) {opt} — {pct:.0f}٪ ({n} نفر)")
+        not_answered = total_participants - len(answers)
         if not_answered > 0:
-            lines.append(f"⏳ جواب ندادن: {not_answered} نفر")
+            lines.append(f"{RLM}⏳ جواب ندادن: {not_answered} نفر")
         lines.append("")
-    return "\n".join(lines)
+    return "\n".join(lines).rstrip()
 
 
 async def _finish_quiz(context, session):
@@ -196,7 +210,7 @@ async def session_callback_router(update: Update, context: ContextTypes.DEFAULT_
         await q.answer()
         await q.edit_message_text(
             f"🎯 آزمون: {quiz['name']}\n\n"
-            f"{MEMBERS_CALL_NAME}، هرکی می‌خواد شرکت کنه دکمه‌ی «من هستم» رو بزنه 🙋\n"
+            f"{MEMBERS_CALL_NAME}، هرکی می‌خواد شرکت کنه دکمه‌ی «من یک اوتیسمی پایه هستم» رو بزنه 🙋\n"
             f"⚠️ بعد از شروع، دیگه کسی نمی‌تونه اضافه بشه.\n\n"
             f"👥 شرکت‌کننده‌ها: 0 نفر",
             reply_markup=kb.join_kb(session_id),
@@ -218,7 +232,7 @@ async def session_callback_router(update: Update, context: ContextTypes.DEFAULT_
         count = db.count_participants(session_id)
         await q.edit_message_text(
             f"🎯 آزمون: {quiz['name']}\n\n"
-            f"{MEMBERS_CALL_NAME}، هرکی می‌خواد شرکت کنه دکمه‌ی «من هستم» رو بزنه 🙋\n"
+            f"{MEMBERS_CALL_NAME}، هرکی می‌خواد شرکت کنه دکمه‌ی «من یک اوتیسمی پایه هستم» رو بزنه 🙋\n"
             f"⚠️ بعد از شروع، دیگه کسی نمی‌تونه اضافه بشه.\n\n"
             f"👥 شرکت‌کننده‌ها: {count} نفر",
             reply_markup=kb.join_kb(session_id),

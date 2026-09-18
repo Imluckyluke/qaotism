@@ -1,5 +1,7 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from config import JOIN_BUTTON_TEXT
+
 
 def main_panel_kb(is_owner: bool):
     rows = [
@@ -105,7 +107,7 @@ def init_quiz_kb(quiz_id):
 def join_kb(session_id):
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("🙋 من هستم اوتیسما!", callback_data=f"j:{session_id}")],
+            [InlineKeyboardButton(JOIN_BUTTON_TEXT, callback_data=f"j:{session_id}")],
             [InlineKeyboardButton("🚀 بزن بریم شروع کنیم! (فقط ادمین/سازنده)", callback_data=f"go:{session_id}")],
         ]
     )

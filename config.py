@@ -11,3 +11,9 @@ DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "aut
 
 # اسمی که برای صدا زدن اعضای گروه استفاده میشه
 MEMBERS_CALL_NAME = "اوتیسمی‌های گل"
+
+# متنی که بالای پنل ادمین نمایش داده میشه
+PANEL_TITLE = "سلام اوتیسمی! 👋\n🎛 پنل مدیریت آزمون"
+
+# متن دکمه‌ی ثبت‌نام در آزمون
+JOIN_BUTTON_TEXT = "🙋 من یک اوتیسمی پایه هستم"
