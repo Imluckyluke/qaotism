@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     current_index INTEGER NOT NULL DEFAULT 0,
     started_by INTEGER,
     inline_message_id TEXT,
+    question_started_at REAL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -61,15 +62,29 @@ CREATE TABLE IF NOT EXISTS answers (
     question_id INTEGER NOT NULL,
     user_id INTEGER NOT NULL,
     option_index INTEGER NOT NULL,
+    elapsed REAL,
+    points INTEGER NOT NULL DEFAULT 0,
+    is_correct INTEGER NOT NULL DEFAULT 0,
     UNIQUE(session_id, question_id, user_id)
 );
 """
 
+# ستون‌های جدید برای دیتابیس‌های قدیمی (که قبل از این نسخه ساخته شدن).
+# (table, column, definition) — added via ALTER TABLE if missing
+MIGRATIONS = [
+    ("sessions", "question_started_at", "REAL"),
+    ("answers", "elapsed", "REAL"),
+    ("answers", "points", "INTEGER NOT NULL DEFAULT 0"),
+    ("answers", "is_correct", "INTEGER NOT NULL DEFAULT 0"),
+]
+
 
 @contextmanager
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    # timeout: اگه فایل موقتاً قفل بود تا ۱۰ ثانیه صبر کن به‌جای خطای فوری «database is locked»
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA synchronous = NORMAL")  # با WAL امنه و هر commit خیلی سریع‌تره
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -80,7 +95,13 @@ def get_conn():
 
 def init_db():
     with get_conn() as conn:
+        # WAL: خواننده‌ها و نویسنده‌ها همدیگه رو قفل نمی‌کنن (این تنظیم توی خود فایل دیتابیس می‌مونه)
+        conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript(SCHEMA)
+        for table, column, definition in MIGRATIONS:
+            cols = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})")]
+            if column not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 # ---------------- Admins ----------------
@@ -225,7 +246,8 @@ def create_session(
 ) -> int:
     with get_conn() as conn:
         cur = conn.execute(
-            """INSERT INTO sessions (quiz_id, chat_id, message_id, started_by, inline_message_id)
+            """INSERT INTO sessions
+               (quiz_id, chat_id, message_id, started_by, inline_message_id)
                VALUES (?,?,?,?,?)""",
             (quiz_id, chat_id, message_id, started_by, inline_message_id),
         )
@@ -250,6 +272,17 @@ def set_session_status(session_id: int, status: str):
 def set_session_index(session_id: int, idx: int):
     with get_conn() as conn:
         conn.execute("UPDATE sessions SET current_index=? WHERE id=?", (idx, session_id))
+
+
+def set_question_state(session_id: int, started_at: float):
+    """لحظه‌ی شروع سوال جاری (برای تایمر و محاسبه‌ی سرعت جواب)."""
+    with get_conn() as conn:
+        conn.execute("UPDATE sessions SET question_started_at=? WHERE id=?", (started_at, session_id))
+
+
+def get_running_sessions():
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM sessions WHERE status='running'").fetchall()
 
 
 def add_participant(session_id: int, user_id: int, full_name: str, username: str) -> bool:
@@ -288,12 +321,22 @@ def count_participants(session_id: int) -> int:
         return row["c"]
 
 
-def record_answer(session_id: int, question_id: int, user_id: int, option_index: int) -> bool:
+def record_answer(
+    session_id: int,
+    question_id: int,
+    user_id: int,
+    option_index: int,
+    elapsed: float = None,
+    points: int = 0,
+    is_correct: bool = False,
+) -> bool:
     with get_conn() as conn:
         try:
             conn.execute(
-                "INSERT INTO answers (session_id, question_id, user_id, option_index) VALUES (?,?,?,?)",
-                (session_id, question_id, user_id, option_index),
+                """INSERT INTO answers
+                   (session_id, question_id, user_id, option_index, elapsed, points, is_correct)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (session_id, question_id, user_id, option_index, elapsed, points, int(is_correct)),
             )
             return True
         except sqlite3.IntegrityError:
@@ -331,28 +374,34 @@ def get_answers_for_question(session_id: int, question_id: int):
 
 
 def get_leaderboard(session_id: int):
-    """Returns list of dicts sorted by score desc: {user_id, full_name, username, score}"""
+    """Returns list of dicts sorted by points desc:
+    {user_id, full_name, username, points, correct}
+    تساوی امتیاز: اول تعداد جواب درست بیشتر، بعد مجموع زمان جواب‌های درست کمتر."""
     with get_conn() as conn:
         participants = conn.execute(
             "SELECT * FROM participants WHERE session_id=?", (session_id,)
         ).fetchall()
         score_rows = conn.execute(
-            """SELECT a.user_id, COUNT(*) as score
-               FROM answers a
-               JOIN questions q ON q.id = a.question_id
-               WHERE a.session_id=? AND a.option_index = q.correct_option
-               GROUP BY a.user_id""",
+            """SELECT user_id,
+                      SUM(points) AS points,
+                      SUM(is_correct) AS correct,
+                      COALESCE(SUM(CASE WHEN is_correct=1 THEN elapsed END), 0) AS total_time
+               FROM answers WHERE session_id=? GROUP BY user_id""",
             (session_id,),
         ).fetchall()
-        score_map = {r["user_id"]: r["score"] for r in score_rows}
-        result = [
-            {
-                "user_id": p["user_id"],
-                "full_name": p["full_name"],
-                "username": p["username"],
-                "score": score_map.get(p["user_id"], 0),
-            }
-            for p in participants
-        ]
-        result.sort(key=lambda x: -x["score"])
+        score_map = {r["user_id"]: r for r in score_rows}
+        result = []
+        for p in participants:
+            sc = score_map.get(p["user_id"])
+            result.append(
+                {
+                    "user_id": p["user_id"],
+                    "full_name": p["full_name"],
+                    "username": p["username"],
+                    "points": sc["points"] if sc else 0,
+                    "correct": sc["correct"] if sc else 0,
+                    "total_time": sc["total_time"] if sc else 0.0,
+                }
+            )
+        result.sort(key=lambda x: (-x["points"], -x["correct"], x["total_time"]))
         return result

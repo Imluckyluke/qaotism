@@ -17,3 +17,13 @@ PANEL_TITLE = "سلام اوتیسمی! 👋\n🎛 پنل مدیریت آزمو�
 
 # متن دکمه‌ی ثبت‌نام در آزمون
 JOIN_BUTTON_TEXT = "🙋 من یک اوتیسمی پایه هستم"
+
+# ---------------- تایمر و امتیازدهی ----------------
+
+# مهلت پاسخ به هر سوال (ثانیه). پیش‌فرض ۲ دقیقه.
+QUESTION_TIME_LIMIT = int(os.environ.get("QUESTION_TIME_LIMIT", "120"))
+
+# امتیاز جواب درست: اگه فوری جواب بدی MAX_POINTS، اگه دقیقاً آخر مهلت جواب بدی MIN_POINTS.
+# بین این دو، امتیاز به‌صورت خطی با زمان کم میشه. جواب غلط = ۰ امتیاز.
+MAX_POINTS = int(os.environ.get("MAX_POINTS", "1000"))
+MIN_POINTS = int(os.environ.get("MIN_POINTS", "100"))

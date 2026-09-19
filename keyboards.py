@@ -118,5 +118,5 @@ def question_kb(session_id, q_index, options):
     for i, opt in enumerate(options):
         label = opt if len(opt) <= 60 else opt[:57] + "..."
         rows.append([InlineKeyboardButton(f"{i+1}) {label}", callback_data=f"a:{session_id}:{q_index}:{i}")])
-    rows.append([InlineKeyboardButton("⏭ سوال بعدی (فقط ادمین/سازنده)", callback_data=f"skip:{session_id}")])
+    rows.append([InlineKeyboardButton("⏭ سوال بعدی (فقط ادمین/سازنده)", callback_data=f"skip:{session_id}:{q_index}")])
     return InlineKeyboardMarkup(rows)

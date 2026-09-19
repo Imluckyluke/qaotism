@@ -73,7 +73,13 @@ def build_app():
 
     db.init_db()
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(runner.recover_running_sessions).build()
+
+    if app.job_queue is None:
+        raise SystemExit(
+            "تایمر سوال‌ها به JobQueue نیاز داره. نصب کن:\n"
+            "pip install -r requirements.txt   (باید python-telegram-bot[job-queue] نصب بشه)"
+        )
 
     app.add_handler(CommandHandler("start", panel.start_cmd))
     app.add_handler(CommandHandler("panel", panel.panel_cmd))
