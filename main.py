@@ -15,6 +15,7 @@ import database as db
 from config import BOT_TOKEN, OWNER_ID
 import handlers_panel as panel
 import handlers_builder as builder
+import handlers_editor as editor
 import handlers_runner as runner
 
 logging.basicConfig(
@@ -48,11 +49,25 @@ async def callback_query_router(update: Update, context: ContextTypes.DEFAULT_TY
             return
         await builder.start_new_quiz(update, context)
         return
+    if data in ("bopt_done", "bq_more", "bq_finish") or data.startswith("bcorrect:"):
+        if not db.is_admin(update.callback_query.from_user.id):
+            await update.callback_query.answer("⛔️ دسترسی نداری.", show_alert=True)
+            return
+    if data.startswith(("qedit:", "qedit_", "eopt_done", "ecorrect:")):
+        if not db.is_admin(update.callback_query.from_user.id):
+            await update.callback_query.answer("⛔️ دسترسی نداری.", show_alert=True)
+            return
+        handled = await editor.edit_callback(update, context)
+        if handled:
+            return
     if data == "bopt_done":
         await builder.finish_options(update, context)
         return
     if data.startswith("bcorrect:"):
-        await builder.set_correct_option(update, context)
+        if context.user_data.get("state") == "await_edit_new_correct":
+            await editor.handle_edit_new_correct(update, context)
+        else:
+            await builder.set_correct_option(update, context)
         return
     if data == "bq_more":
         await builder.add_more_question(update, context)

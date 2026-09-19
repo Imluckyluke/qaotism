@@ -60,9 +60,81 @@ def quiz_list_kb(rows, prefix="qv"):
 def quiz_detail_kb(quiz_id):
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton("✏️ ویرایش آزمون", callback_data=f"qedit:{quiz_id}")],
             [InlineKeyboardButton("🗑 حذف آزمون", callback_data=f"qdel:{quiz_id}")],
             [InlineKeyboardButton("🔙 بازگشت به لیست", callback_data="mk_list")],
         ]
+    )
+
+
+def quiz_edit_menu_kb(quiz_id):
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📝 تغییر اسم آزمون", callback_data=f"qedit_name:{quiz_id}")],
+            [InlineKeyboardButton("❓ مدیریت سوال‌ها", callback_data=f"qedit_qs:{quiz_id}")],
+            [InlineKeyboardButton("➕ افزودن سوال جدید", callback_data=f"qedit_addq:{quiz_id}")],
+            [InlineKeyboardButton("🔙 بازگشت به آزمون", callback_data=f"qv:{quiz_id}")],
+        ]
+    )
+
+
+def quiz_edit_questions_kb(quiz_id, questions):
+    rows = []
+    for i, qs in enumerate(questions, 1):
+        label = qs["text"] if len(qs["text"]) <= 40 else qs["text"][:37] + "..."
+        rows.append(
+            [InlineKeyboardButton(f"{i}. {label}", callback_data=f"qedit_q:{qs['id']}")]
+        )
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f"qedit:{quiz_id}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def question_edit_kb(question_id, quiz_id):
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📝 ویرایش متن سوال", callback_data=f"qedit_qtext:{question_id}")],
+            [InlineKeyboardButton("🔤 ویرایش گزینه‌ها", callback_data=f"qedit_opts:{question_id}")],
+            [InlineKeyboardButton("✅ تغییر جواب درست", callback_data=f"qedit_qcorr:{question_id}")],
+            [InlineKeyboardButton("🗑 حذف این سوال", callback_data=f"qedit_qdel:{question_id}")],
+            [InlineKeyboardButton("🔙 بازگشت به سوال‌ها", callback_data=f"qedit_qs:{quiz_id}")],
+        ]
+    )
+
+
+def question_delete_confirm_kb(question_id, quiz_id):
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("✅ بله، حذف کن", callback_data=f"qedit_qdelok:{question_id}")],
+            [InlineKeyboardButton("↩️ انصراف", callback_data=f"qedit_q:{question_id}")],
+        ]
+    )
+
+
+def option_edit_list_kb(question_id, options):
+    rows = []
+    for i, opt in enumerate(options):
+        label = opt if len(opt) <= 40 else opt[:37] + "..."
+        rows.append(
+            [InlineKeyboardButton(f"{i+1}) {label}", callback_data=f"qedit_opt:{question_id}:{i}")]
+        )
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f"qedit_q:{question_id}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def edit_choose_correct_kb(question_id, options):
+    rows = []
+    for i, opt in enumerate(options):
+        label = opt if len(opt) <= 40 else opt[:37] + "..."
+        rows.append(
+            [InlineKeyboardButton(f"{i+1}) {label}", callback_data=f"ecorrect:{question_id}:{i}")]
+        )
+    rows.append([InlineKeyboardButton("🔙 انصراف", callback_data=f"qedit_q:{question_id}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def edit_option_collect_kb():
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("✅ پایان گزینه‌ها", callback_data="eopt_done")]]
     )
 
 

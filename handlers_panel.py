@@ -114,6 +114,9 @@ async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("qdelok:"):
         quiz_id = int(data.split(":")[1])
+        if db.has_active_sessions(quiz_id):
+            await q.answer("این آزمون الان در حال اجراست و نمی‌شه حذفش کرد.", show_alert=True)
+            return
         db.delete_quiz(quiz_id)
         await q.answer("حذف شد ✅")
         rows = db.list_quizzes()

@@ -4,6 +4,8 @@ from telegram.ext import ContextTypes
 import database as db
 import keyboards as kb
 
+MAX_OPTIONS = 10
+
 
 def _fresh_build():
     return {"name": None, "questions": [], "current_q": None}
@@ -50,8 +52,20 @@ async def handle_option_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("گزینه نمی‌تونه خالی باشه.")
         return
     cq = context.user_data["build"]["current_q"]
+    if len(cq["options"]) >= MAX_OPTIONS:
+        await update.message.reply_text(
+            f"حداکثر {MAX_OPTIONS} گزینه می‌تونی اضافه کنی. روی «✅ پایان گزینه‌ها» بزن.",
+            reply_markup=kb.option_collect_kb(),
+        )
+        return
     cq["options"].append(text)
     n = len(cq["options"])
+    if n >= MAX_OPTIONS:
+        await update.message.reply_text(
+            f"گزینه {n} ثبت شد ✅\nبه سقف {MAX_OPTIONS} گزینه رسیدی، روی دکمه بزن:",
+            reply_markup=kb.option_collect_kb(),
+        )
+        return
     if n < 2:
         await update.message.reply_text(f"گزینه {n} ثبت شد ✅\nگزینه بعدی رو بفرست:")
         return
@@ -137,6 +151,31 @@ async def handle_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await handle_admin_id_text(update, context)
         return
     if not db.is_admin(update.effective_user.id):
+        return
+    if state == "await_edit_quiz_name":
+        from handlers_editor import handle_edit_quiz_name
+
+        await handle_edit_quiz_name(update, context)
+        return
+    if state == "await_edit_q_text":
+        from handlers_editor import handle_edit_q_text
+
+        await handle_edit_q_text(update, context)
+        return
+    if state == "await_edit_opt_text":
+        from handlers_editor import handle_edit_opt_text
+
+        await handle_edit_opt_text(update, context)
+        return
+    if state == "await_edit_new_q_text":
+        from handlers_editor import handle_edit_new_q_text
+
+        await handle_edit_new_q_text(update, context)
+        return
+    if state == "await_edit_new_opt":
+        from handlers_editor import handle_edit_new_opt
+
+        await handle_edit_new_opt(update, context)
         return
     if state == "await_quiz_name":
         await handle_quiz_name(update, context)

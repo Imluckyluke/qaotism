@@ -27,3 +27,8 @@ QUESTION_TIME_LIMIT = int(os.environ.get("QUESTION_TIME_LIMIT", "120"))
 # بین این دو، امتیاز به‌صورت خطی با زمان کم میشه. جواب غلط = ۰ امتیاز.
 MAX_POINTS = int(os.environ.get("MAX_POINTS", "1000"))
 MIN_POINTS = int(os.environ.get("MIN_POINTS", "100"))
+
+# ---------------- نتیجه‌ی Rich ----------------
+# با الهام از telegram-rich-writer: نتیجه با تیتر و جدول (sendRichMessage) ارسال میشه.
+# اگه API پشتیبانی نکنه، خودکار فالبک به متن ساده زده میشه. برای غیرفعال کردن: RICH_RESULTS=0
+RICH_RESULTS = os.environ.get("RICH_RESULTS", "1") == "1"

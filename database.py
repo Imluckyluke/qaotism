@@ -156,6 +156,16 @@ def delete_quiz(quiz_id: int):
         conn.execute("DELETE FROM quizzes WHERE id=?", (quiz_id,))
 
 
+def has_active_sessions(quiz_id: int) -> bool:
+    """True if there is a joining/running session for this quiz."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM sessions WHERE quiz_id=? AND status IN ('joining','running') LIMIT 1",
+            (quiz_id,),
+        ).fetchone()
+        return row is not None
+
+
 def list_quizzes(search: str = None):
     with get_conn() as conn:
         if search:
@@ -233,6 +243,59 @@ def get_question(question_id: int):
             "correct_option": q["correct_option"],
             "options": [o["text"] for o in orows],
         }
+
+
+# ---------------- Editing (quiz/question/option updates) ----------------
+
+def rename_quiz(quiz_id: int, name: str):
+    with get_conn() as conn:
+        conn.execute("UPDATE quizzes SET name=? WHERE id=?", (name, quiz_id))
+
+
+def update_question_text(question_id: int, text: str):
+    with get_conn() as conn:
+        conn.execute("UPDATE questions SET text=? WHERE id=?", (text, question_id))
+
+
+def update_question_correct(question_id: int, correct_option: int):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE questions SET correct_option=? WHERE id=?", (correct_option, question_id)
+        )
+
+
+def update_option_text(question_id: int, order_index: int, text: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE options SET text=? WHERE question_id=? AND order_index=?",
+            (text, question_id, order_index),
+        )
+        return cur.rowcount > 0
+
+
+def delete_question(question_id: int):
+    """Deletes a question (options cascade) and compacts order_index of siblings."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT quiz_id, order_index FROM questions WHERE id=?", (question_id,)
+        ).fetchone()
+        if not row:
+            return
+        conn.execute("DELETE FROM questions WHERE id=?", (question_id,))
+        conn.execute(
+            """UPDATE questions SET order_index = order_index - 1
+               WHERE quiz_id=? AND order_index > ?""",
+            (row["quiz_id"], row["order_index"]),
+        )
+
+
+def next_question_order(quiz_id: int) -> int:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(order_index), -1) AS m FROM questions WHERE quiz_id=?",
+            (quiz_id,),
+        ).fetchone()
+        return (row["m"] if row else -1) + 1
 
 
 # ---------------- Sessions ----------------

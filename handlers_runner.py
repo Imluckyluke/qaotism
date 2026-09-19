@@ -13,7 +13,8 @@ from telegram.ext import ContextTypes
 
 import database as db
 import keyboards as kb
-from config import MAX_POINTS, MEMBERS_CALL_NAME, MIN_POINTS, QUESTION_TIME_LIMIT
+import rich_report
+from config import BOT_TOKEN, MAX_POINTS, MEMBERS_CALL_NAME, MIN_POINTS, QUESTION_TIME_LIMIT, RICH_RESULTS
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,8 @@ async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     rows = db.list_quizzes(search if search else None)
     results = []
     for r in rows[:20]:
+        if not r["qcount"]:
+            continue
         results.append(
             InlineQueryResultArticle(
                 id=str(uuid.uuid4()),
@@ -255,15 +258,38 @@ async def _finish_quiz(context, session):
     questions = db.get_questions(quiz_id)
     db.set_session_status(session_id, "finished")
     _locks.pop(session_id, None)
-    report = _build_final_report(quiz, questions, session_id)
+    if not quiz or not questions:
+        await _edit_session_message(context, session, "این آزمون توسط ادمین حذف شده، پس همین‌جا تمومش می‌کنیم.")
+        return
 
     if session["inline_message_id"]:
         # Inline-sent messages have no known chat_id, so extra messages
         # can't be sent to the chat -- truncate to fit a single message.
+        report = _build_final_report(quiz, questions, session_id)
         if len(report) > 4000:
             report = report[:3950] + "\n\n… (نتیجه طولانی بود و خلاصه شد)"
         await _edit_session_message(context, session, report)
         return
+
+    # نتیجه‌ی Rich (به سبک telegram-rich-writer): تیتر + جدول، با فالبک به متن ساده.
+    if RICH_RESULTS and session["chat_id"]:
+        try:
+            html_chunks = rich_report.build_rich_chunks(quiz, questions, session_id)
+            sent = await rich_report.send_rich_chunks(
+                BOT_TOKEN, session["chat_id"], html_chunks,
+                reply_to_message_id=session["message_id"],
+            )
+            if sent:
+                await _edit_session_message(
+                    context, session,
+                    f"🏁 نتایج آزمون «{quiz['name']}» 👇",
+                )
+                return
+        except Exception:
+            logger.exception("ساخت/ارسال Rich Message ناموفق بود؛ فالبک به متن ساده.")
+        # اگه به هر دلیلی Rich نشد، ادامه بده با متن ساده (کد قبلی)
+
+    report = _build_final_report(quiz, questions, session_id)
 
     # Telegram messages are capped at 4096 chars; split if needed.
     chunks = []
@@ -290,7 +316,8 @@ async def _advance_locked(context, session):
     session_id = session["id"]
     idx = session["current_index"]
     next_index = idx + 1
-    if next_index >= len(db.get_questions(session["quiz_id"])):
+    questions = db.get_questions(session["quiz_id"])
+    if not questions or next_index >= len(questions):
         _cancel_timeout(context.job_queue, session_id, idx)
         await _finish_quiz(context, session)
         return
@@ -337,6 +364,9 @@ async def session_callback_router(update: Update, context: ContextTypes.DEFAULT_
         if not quiz:
             await q.answer("این آزمون دیگه وجود نداره.", show_alert=True)
             return True
+        if not db.get_questions(quiz_id):
+            await q.answer("این آزمون هیچ سوالی نداره و قابل اجرا نیست.", show_alert=True)
+            return True
 
         if q.message is not None:
             # normal message (e.g. sent directly in the group)
@@ -366,7 +396,11 @@ async def session_callback_router(update: Update, context: ContextTypes.DEFAULT_
             await q.answer("قبلاً ثبت‌نام کردی 😉")
         quiz = db.get_quiz(session["quiz_id"])
         count = db.count_participants(session_id)
-        await q.edit_message_text(_intro_text(quiz, count), reply_markup=kb.join_kb(session_id))
+        try:
+            await q.edit_message_text(_intro_text(quiz, count), reply_markup=kb.join_kb(session_id))
+        except BadRequest as e:
+            if "not modified" not in str(e).lower():
+                raise
         return True
 
     if data.startswith("go:"):
@@ -427,7 +461,11 @@ async def session_callback_router(update: Update, context: ContextTypes.DEFAULT_
             if elapsed >= QUESTION_TIME_LIMIT:
                 # تایمر هنوز نرسیده اجرا بشه، ولی مهلت تموم شده
                 await q.answer("⏰ وقت این سوال تموم شده.", show_alert=True)
-                await _advance_locked(context, session)
+                try:
+                    await _advance_locked(context, session)
+                except TelegramError:
+                    logger.exception("رفتن به سوال بعد ناموفق بود؛ %s ثانیه دیگه دوباره تلاش میشه", RETRY_DELAY)
+                    _schedule_timeout(context.job_queue, session_id, q_index, RETRY_DELAY)
                 return True
 
             is_correct = opt_index == qdata["correct_option"]
@@ -443,7 +481,11 @@ async def session_callback_router(update: Update, context: ContextTypes.DEFAULT_
             await _refresh_question(context, session, qdata, q_index, len(questions))
 
             if db.count_answers(session_id, qdata["id"]) >= db.count_participants(session_id):
-                await _advance_locked(context, db.get_session(session_id))
+                try:
+                    await _advance_locked(context, db.get_session(session_id))
+                except TelegramError:
+                    logger.exception("رفتن به سوال بعد ناموفق بود؛ %s ثانیه دیگه دوباره تلاش میشه", RETRY_DELAY)
+                    _schedule_timeout(context.job_queue, session_id, q_index, RETRY_DELAY)
         return True
 
     if data.startswith("skip:"):
@@ -458,8 +500,17 @@ async def session_callback_router(update: Update, context: ContextTypes.DEFAULT_
             await q.answer("⛔️ فقط ادمین یا سازنده‌ی آزمون می‌تونه رد کنه.", show_alert=True)
             return True
         expected = int(parts[2]) if len(parts) > 2 else session["current_index"]
-        await q.answer("رفتیم سوال بعدی ⏭")
-        await advance_question(context, session_id, expected)
+        try:
+            moved = await advance_question(context, session_id, expected)
+        except TelegramError:
+            logger.exception("رد کردن سوال ناموفق بود؛ %s ثانیه دیگه دوباره تلاش میشه", RETRY_DELAY)
+            _schedule_timeout(context.job_queue, session_id, expected, RETRY_DELAY)
+            await q.answer("ارسال سوال بعدی ناموفق بود؛ چند ثانیه دیگه دوباره تلاش میشه.", show_alert=True)
+            return True
+        if moved:
+            await q.answer("رفتیم سوال بعدی ⏭")
+        else:
+            await q.answer("این سوال قبلاً رد شده.", show_alert=True)
         return True
 
     return False
