@@ -42,9 +42,14 @@ def build_rich_chunks(quiz, questions, session_id) -> list:
       <h1> title </h1>
       <p> meta </p>
       <h2> leaderboard </h2>
-      <table bordered striped compact> ...
+      <table bordered striped> ...
       <h2> per-question </h2>
       <table> per question ...
+
+    NOTE: only long-supported attrs are used (bordered/striped).
+    Newer attrs like `compact` (10.3) or `expandable` blockquotes are
+    avoided on purpose: unknown attrs make the whole call fail with
+    Bad Request on servers/clients that don't know them yet.
     """
     total_participants = db.count_participants(session_id)
     board = db.get_leaderboard(session_id)
@@ -69,7 +74,7 @@ def build_rich_chunks(quiz, questions, session_id) -> list:
                 f"<td>{int(p['points'])}</td><td>{int(p['correct'])} از {len(questions)}</td></tr>"
             )
         head.append(
-            "<table bordered striped compact>"
+            "<table bordered striped>"
             "<tr><th>رتبه</th><th>شرکت‌کننده</th><th>امتیاز</th><th>درست</th></tr>"
             + "".join(rows)
             + "</table>"
@@ -102,14 +107,14 @@ def build_rich_chunks(quiz, questions, session_id) -> list:
         block = (
             f"<h2>❓ سوال {i}</h2>"
             f"<p><b>{_esc(_short(qdata['text'], 500))}</b></p>"
-            "<table bordered striped compact>"
+            "<table bordered striped>"
             "<tr><th></th><th>گزینه</th><th>درصد</th><th>تعداد</th></tr>"
             + "".join(opt_rows)
             + "</table>"
         )
         not_answered = total_participants - len(answers)
         if not_answered > 0:
-            block += f"<blockquote expandable>⏳ جواب ندادن: {not_answered} نفر</blockquote>"
+            block += f"<blockquote>⏳ جواب ندادن: {not_answered} نفر</blockquote>"
 
         # اگه با اضافه کردن این سوال از سقف رد میشیم، چانک فعلی رو ببند و یکی جدید باز کن
         if len(cur) + 1 + len(block) > MAX_RICH_HTML:
@@ -122,13 +127,31 @@ def build_rich_chunks(quiz, questions, session_id) -> list:
     return [c for c in chunks if c.strip()]
 
 
-async def send_rich_chunks(bot_token: str, chat_id: int, html_chunks: list, reply_to_message_id=None) -> bool:
-    """Sends html chunks via raw Bot API `sendRichMessage`. Returns True on success.
+def sample_rich_html() -> str:
+    """Minimal sample (only long-supported tags) for /testrich diagnostics."""
+    return (
+        "<h1>تست پیام غنی ✅</h1>"
+        "<p>اگه این پیام رو با تیتر و جدول می‌بینی، sendRichMessage کار می‌کنه.</p>"
+        "<table bordered striped>"
+        "<tr><th>قابلیت</th><th>وضعیت</th></tr>"
+        "<tr><td>Rich Message</td><td><b>فعال</b></td></tr>"
+        "<tr><td>جدول</td><td>فعال</td></tr>"
+        "</table>"
+    )
 
-    Returns False on any error so the caller can fall back to plain text.
+
+async def send_rich_chunks(
+    bot_token: str, chat_id: int, html_chunks: list, reply_to_message_id=None
+) -> tuple:
+    """Sends html chunks via raw Bot API `sendRichMessage`.
+
+    Returns (True, "") on success, (False, reason) on any error so the
+    caller can fall back to plain text (and /testrich can show the reason).
     """
-    if not html_chunks or not bot_token:
-        return False
+    if not html_chunks:
+        return False, "nothing to send"
+    if not bot_token:
+        return False, "BOT_TOKEN is empty"
 
     payloads = []
     for chunk in html_chunks:
@@ -153,19 +176,21 @@ async def send_rich_chunks(bot_token: str, chat_id: int, html_chunks: list, repl
                 resp = await client.post(url, json=payload)
                 data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
                 if resp.status_code != 200 or not data.get("ok", False):
-                    logger.warning("sendRichMessage ناموفق بود: %s %s", resp.status_code, str(data)[:500])
-                    return False
-        return True
+                    reason = f"HTTP {resp.status_code}: {str(data)[:300]}"
+                    logger.warning("sendRichMessage ناموفق بود: %s", reason)
+                    return False, reason
+        return True, ""
     except ImportError:
         pass  # فالبک به urllib پایین
-    except Exception:
+    except Exception as e:
         logger.exception("ارسال Rich Message ناموفق بود؛ فالبک به متن ساده.")
-        return False
+        return False, f"transport error: {e}"
 
     # فالبک بدون httpx (با urllib استاندارد، چون PTB همیشه httpx نداره تو همه محیط‌ها)
     try:
         import asyncio
         import json as _json
+        import urllib.error as _urlerr
         import urllib.request as _urlopen
 
         def _post(payload):
@@ -174,15 +199,22 @@ async def send_rich_chunks(bot_token: str, chat_id: int, html_chunks: list, repl
                 data=_json.dumps(payload).encode("utf-8"),
                 headers={"Content-Type": "application/json; charset=utf-8"},
             )
-            with _urlopen.urlopen(req, timeout=20) as resp:
-                return _json.loads(resp.read().decode("utf-8"))
+            try:
+                with _urlopen.urlopen(req, timeout=20) as resp:
+                    return _json.loads(resp.read().decode("utf-8"))
+            except _urlerr.HTTPError as e:
+                try:
+                    return _json.loads(e.read().decode("utf-8"))
+                except Exception:
+                    return {"ok": False, "description": f"HTTP {e.code}"}
 
         for payload in payloads:
             data = await asyncio.to_thread(_post, payload)
             if not data.get("ok", False):
-                logger.warning("sendRichMessage ناموفق بود: %s", str(data)[:500])
-                return False
-        return True
-    except Exception:
+                reason = str(data.get("description", data))[:300]
+                logger.warning("sendRichMessage ناموفق بود: %s", reason)
+                return False, reason
+        return True, ""
+    except Exception as e:
         logger.exception("ارسال Rich Message ناموفق بود؛ فالبک به متن ساده.")
-        return False
+        return False, f"transport error: {e}"

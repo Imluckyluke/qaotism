@@ -3,7 +3,8 @@ from telegram.ext import ContextTypes
 
 import database as db
 import keyboards as kb
-from config import MEMBERS_CALL_NAME, PANEL_TITLE
+import rich_report
+from config import BOT_TOKEN, MEMBERS_CALL_NAME, PANEL_TITLE
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -32,6 +33,28 @@ async def panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         PANEL_TITLE, reply_markup=kb.main_panel_kb(db.is_owner(uid))
     )
+
+
+async def testrich_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/testrich: sends a minimal Rich Message to diagnose sendRichMessage support."""
+    if update.effective_chat.type != "private":
+        return
+    if not db.is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔️ فقط ادمین‌ها.")
+        return
+    if not BOT_TOKEN:
+        await update.message.reply_text("BOT_TOKEN تنظیم نشده.")
+        return
+    await update.message.reply_text("دارم Rich Message تستی می‌فرستم…")
+    ok, reason = await rich_report.send_rich_chunks(
+        BOT_TOKEN, update.effective_chat.id, [rich_report.sample_rich_html()]
+    )
+    if ok:
+        await update.message.reply_text("✅ Rich Message کار می‌کنه.")
+    else:
+        await update.message.reply_text(
+            f"❌ Rich Message ناموفق بود و نتیجه‌ها متن ساده میشن.\nدلیل: {reason}"
+        )
 
 
 async def addadmin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -275,16 +275,17 @@ async def _finish_quiz(context, session):
     if RICH_RESULTS and session["chat_id"]:
         try:
             html_chunks = rich_report.build_rich_chunks(quiz, questions, session_id)
-            sent = await rich_report.send_rich_chunks(
+            ok, reason = await rich_report.send_rich_chunks(
                 BOT_TOKEN, session["chat_id"], html_chunks,
                 reply_to_message_id=session["message_id"],
             )
-            if sent:
+            if ok:
                 await _edit_session_message(
                     context, session,
                     f"🏁 نتایج آزمون «{quiz['name']}» 👇",
                 )
                 return
+            logger.warning("Rich Message نشد (%s)؛ فالبک به متن ساده.", reason)
         except Exception:
             logger.exception("ساخت/ارسال Rich Message ناموفق بود؛ فالبک به متن ساده.")
         # اگه به هر دلیلی Rich نشد، ادامه بده با متن ساده (کد قبلی)

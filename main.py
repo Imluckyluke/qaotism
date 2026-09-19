@@ -99,6 +99,7 @@ def build_app():
     app.add_handler(CommandHandler("start", panel.start_cmd))
     app.add_handler(CommandHandler("panel", panel.panel_cmd))
     app.add_handler(CommandHandler("addadmin", panel.addadmin_cmd))
+    app.add_handler(CommandHandler("testrich", panel.testrich_cmd))
 
     app.add_handler(CallbackQueryHandler(callback_query_router))
     app.add_handler(InlineQueryHandler(runner.inline_query_handler))
