@@ -263,8 +263,21 @@ async def _finish_quiz(context, session):
         return
 
     if session["inline_message_id"]:
-        # Inline-sent messages have no known chat_id, so extra messages
-        # can't be sent to the chat -- truncate to fit a single message.
+        # Inline-sent messages have no known chat_id, so the message itself
+        # is edited -- first try a Rich edit, then fall back to plain text.
+        if RICH_RESULTS and BOT_TOKEN:
+            try:
+                html_chunks = rich_report.build_rich_chunks(quiz, questions, session_id)
+                combined = "\n".join(html_chunks)
+                if len(combined) <= 30_000:
+                    ok, reason = await rich_report.edit_rich_inline(
+                        BOT_TOKEN, session["inline_message_id"], combined
+                    )
+                    if ok:
+                        return
+                    logger.warning("Rich Message نشد (%s)؛ فالبک به متن ساده.", reason)
+            except Exception:
+                logger.exception("ساخت/ارسال Rich Message ناموفق بود؛ فالبک به متن ساده.")
         report = _build_final_report(quiz, questions, session_id)
         if len(report) > 4000:
             report = report[:3950] + "\n\n… (نتیجه طولانی بود و خلاصه شد)"
@@ -472,11 +485,8 @@ async def session_callback_router(update: Update, context: ContextTypes.DEFAULT_
             is_correct = opt_index == qdata["correct_option"]
             points = calc_points(elapsed) if is_correct else 0
             db.record_answer(session_id, qdata["id"], user.id, opt_index, elapsed, points, is_correct)
-            await q.answer(
-                f"جوابت ثبت شد ✅ (در {elapsed:.1f} ثانیه)\n"
-                "نتیجه تا آخر آزمون به کسی نشون داده نمیشه.",
-                show_alert=True,
-            )
+            # ثبت سایلنت: هیچ پاپ‌آپی روی صفحه‌ی کاربر نمیاد (فقط اسپینر دکمه می‌ایسته)
+            await q.answer()
 
             # update visible answered-count without revealing choices
             await _refresh_question(context, session, qdata, q_index, len(questions))

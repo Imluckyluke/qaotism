@@ -140,60 +140,34 @@ def sample_rich_html() -> str:
     )
 
 
-async def send_rich_chunks(
-    bot_token: str, chat_id: int, html_chunks: list, reply_to_message_id=None
-) -> tuple:
-    """Sends html chunks via raw Bot API `sendRichMessage`.
-
-    Returns (True, "") on success, (False, reason) on any error so the
-    caller can fall back to plain text (and /testrich can show the reason).
-    """
-    if not html_chunks:
-        return False, "nothing to send"
-    if not bot_token:
-        return False, "BOT_TOKEN is empty"
-
-    payloads = []
-    for chunk in html_chunks:
-        payload = {
-            "chat_id": chat_id,
-            "rich_message": {"html": chunk, "is_rtl": True},
-        }
-        if reply_to_message_id:
-            payload["reply_parameters"] = {
-                "message_id": reply_to_message_id,
-                "allow_sending_without_reply": True,
-            }
-        payloads.append(payload)
-        reply_to_message_id = None  # فقط پیام اول ریپلای میشه تا اسپم نشه
-
-    url = f"https://api.telegram.org/bot{bot_token}/sendRichMessage"
+async def _api_post(bot_token: str, method: str, payload: dict) -> tuple:
+    """Raw Bot API POST. Returns (True, data) or (False, reason)."""
+    url = f"https://api.telegram.org/bot{bot_token}/{method}"
     try:
         import httpx
 
         async with httpx.AsyncClient(timeout=20) as client:
-            for payload in payloads:
-                resp = await client.post(url, json=payload)
-                data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
-                if resp.status_code != 200 or not data.get("ok", False):
-                    reason = f"HTTP {resp.status_code}: {str(data)[:300]}"
-                    logger.warning("sendRichMessage ناموفق بود: %s", reason)
-                    return False, reason
-        return True, ""
+            resp = await client.post(url, json=payload)
+            try:
+                data = resp.json()
+            except Exception:
+                data = {}
+            if resp.status_code != 200 or not data.get("ok", False):
+                return False, f"HTTP {resp.status_code}: {str(data)[:300]}"
+            return True, data
     except ImportError:
         pass  # فالبک به urllib پایین
     except Exception as e:
-        logger.exception("ارسال Rich Message ناموفق بود؛ فالبک به متن ساده.")
         return False, f"transport error: {e}"
 
-    # فالبک بدون httpx (با urllib استاندارد، چون PTB همیشه httpx نداره تو همه محیط‌ها)
+    # فالبک بدون httpx (با urllib استاندارد)
     try:
         import asyncio
         import json as _json
         import urllib.error as _urlerr
         import urllib.request as _urlopen
 
-        def _post(payload):
+        def _post():
             req = _urlopen.Request(
                 url,
                 data=_json.dumps(payload).encode("utf-8"),
@@ -208,13 +182,62 @@ async def send_rich_chunks(
                 except Exception:
                     return {"ok": False, "description": f"HTTP {e.code}"}
 
-        for payload in payloads:
-            data = await asyncio.to_thread(_post, payload)
-            if not data.get("ok", False):
-                reason = str(data.get("description", data))[:300]
-                logger.warning("sendRichMessage ناموفق بود: %s", reason)
-                return False, reason
-        return True, ""
+        data = await asyncio.to_thread(_post)
+        if not data.get("ok", False):
+            return False, str(data.get("description", data))[:300]
+        return True, data
     except Exception as e:
-        logger.exception("ارسال Rich Message ناموفق بود؛ فالبک به متن ساده.")
         return False, f"transport error: {e}"
+
+
+async def edit_rich_inline(bot_token: str, inline_message_id: str, html: str) -> tuple:
+    """Edits an inline-sent message to a Rich Message via editMessageText.
+
+    Used for quiz sessions started through inline mode (no chat_id known).
+    Buttons are cleared with an empty keyboard. Returns (True, "") or (False, reason).
+    """
+    if not html or not bot_token or not inline_message_id:
+        return False, "missing params"
+    ok, data = await _api_post(
+        bot_token,
+        "editMessageText",
+        {
+            "inline_message_id": inline_message_id,
+            "rich_message": {"html": html, "is_rtl": True},
+            "reply_markup": {"inline_keyboard": []},
+        },
+    )
+    if not ok:
+        logger.warning("editMessageText rich ناموفق بود: %s", data)
+    return (True, "") if ok else (False, data)
+
+
+async def send_rich_chunks(
+    bot_token: str, chat_id: int, html_chunks: list, reply_to_message_id=None
+) -> tuple:
+    """Sends html chunks via raw Bot API `sendRichMessage`.
+
+    Returns (True, "") on success, (False, reason) on any error so the
+    caller can fall back to plain text (and /testrich can show the reason).
+    """
+    if not html_chunks:
+        return False, "nothing to send"
+    if not bot_token:
+        return False, "BOT_TOKEN is empty"
+
+    for chunk in html_chunks:
+        payload = {
+            "chat_id": chat_id,
+            "rich_message": {"html": chunk, "is_rtl": True},
+        }
+        if reply_to_message_id:
+            payload["reply_parameters"] = {
+                "message_id": reply_to_message_id,
+                "allow_sending_without_reply": True,
+            }
+            reply_to_message_id = None  # فقط پیام اول ریپلای میشه تا اسپم نشه
+        ok, data = await _api_post(bot_token, "sendRichMessage", payload)
+        if not ok:
+            logger.warning("sendRichMessage ناموفق بود: %s", data)
+            return False, data
+    return True, ""
