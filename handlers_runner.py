@@ -66,6 +66,40 @@ def _cancel_timeout(job_queue, session_id: int, q_index: int):
 
 RETRY_DELAY = 5  # ثانیه؛ اگه رفتن به سوال بعد خطا داد، تایمر بعد از این مدت دوباره تلاش می‌کنه
 
+# آخرین ادیت صفحه‌ی ثبت‌نام هر سشن (ضداسپم: جوین‌های پشت سر هم هرکدوم یه ادیت نزنن)
+_join_edit_at = {}
+
+
+def _rich_target_kwargs(session):
+    """kwargs for rich_report.try_edit_rich based on session message type."""
+    if session["inline_message_id"]:
+        return {"inline_message_id": session["inline_message_id"]}
+    return {"chat_id": session["chat_id"], "message_id": session["message_id"]}
+
+
+async def _edit_intro(context, session, quiz, count):
+    """Join/intro screen: rich first, plain fallback. Ignores not-modified."""
+    markup = kb.join_kb(session["id"])
+    if RICH_RESULTS and BOT_TOKEN:
+        try:
+            html = rich_report.intro_html(
+                quiz["name"], count, _fmt_limit(), MIN_POINTS, MAX_POINTS
+            )
+            ok, _ = await rich_report.try_edit_rich(
+                BOT_TOKEN, html,
+                **_rich_target_kwargs(session),
+                reply_markup_dict=markup.to_dict(),
+            )
+            if ok:
+                return
+        except Exception:
+            logger.exception("ادیت Rich معرفی ناموفق بود؛ فالبک به متن ساده.")
+    try:
+        await _edit_session_message(context, session, _intro_text(quiz, count), markup)
+    except BadRequest as e:
+        if "not modified" not in str(e).lower():
+            raise
+
 
 async def _timeout_job(context: ContextTypes.DEFAULT_TYPE):
     data = context.job.data
@@ -167,8 +201,27 @@ async def _send_question(context, session, q_index):
     session_id = session["id"]
     questions = db.get_questions(session["quiz_id"])
     qdata = questions[q_index]
-    text = _question_text(session_id, qdata, q_index, len(questions))
+    total = len(questions)
     markup = kb.question_kb(session_id, q_index, qdata["options"])
+    if RICH_RESULTS and BOT_TOKEN:
+        try:
+            html = rich_report.question_html(
+                qdata, q_index, total, _fmt_limit(),
+                db.count_participants(session_id),
+                db.count_answers(session_id, qdata["id"]),
+            )
+            ok, _ = await rich_report.try_edit_rich(
+                BOT_TOKEN, html,
+                **_rich_target_kwargs(session),
+                reply_markup_dict=markup.to_dict(),
+            )
+            if ok:
+                db.set_question_state(session_id, time.time())
+                _schedule_timeout(context.job_queue, session_id, q_index, QUESTION_TIME_LIMIT)
+                return
+        except Exception:
+            logger.exception("ادیت Rich سوال ناموفق بود؛ فالبک به متن ساده.")
+    text = _question_text(session_id, qdata, q_index, total)
     await _retry(lambda: _edit_session_message(context, session, text, markup))
 
     # از همین لحظه که سوال دیده میشه، ساعت می‌افته
@@ -178,8 +231,24 @@ async def _send_question(context, session, q_index):
 
 async def _refresh_question(context, session, qdata, q_index, total):
     """شمارنده‌ی جواب‌ها رو به‌روز می‌کنه. خطاهای بی‌اهمیت نادیده گرفته میشن."""
-    text = _question_text(session["id"], qdata, q_index, total)
     markup = kb.question_kb(session["id"], q_index, qdata["options"])
+    if RICH_RESULTS and BOT_TOKEN:
+        try:
+            html = rich_report.question_html(
+                qdata, q_index, total, _fmt_limit(),
+                db.count_participants(session["id"]),
+                db.count_answers(session["id"], qdata["id"]),
+            )
+            ok, _ = await rich_report.try_edit_rich(
+                BOT_TOKEN, html,
+                **_rich_target_kwargs(session),
+                reply_markup_dict=markup.to_dict(),
+            )
+            if ok:
+                return
+        except Exception:
+            logger.exception("رفرش Rich سوال ناموفق بود؛ فالبک به متن ساده.")
+    text = _question_text(session["id"], qdata, q_index, total)
     try:
         await _edit_session_message(context, session, text, markup)
     except BadRequest as e:
@@ -258,6 +327,7 @@ async def _finish_quiz(context, session):
     questions = db.get_questions(quiz_id)
     db.set_session_status(session_id, "finished")
     _locks.pop(session_id, None)
+    _join_edit_at.pop(session_id, None)
     if not quiz or not questions:
         await _edit_session_message(context, session, "این آزمون توسط ادمین حذف شده، پس همین‌جا تمومش می‌کنیم.")
         return
@@ -394,7 +464,7 @@ async def session_callback_router(update: Update, context: ContextTypes.DEFAULT_
             )
 
         await q.answer()
-        await q.edit_message_text(_intro_text(quiz, 0), reply_markup=kb.join_kb(session_id))
+        await _edit_intro(context, db.get_session(session_id), quiz, 0)
         return True
 
     if data.startswith("j:"):
@@ -408,13 +478,13 @@ async def session_callback_router(update: Update, context: ContextTypes.DEFAULT_
             await q.answer("ثبت شدی ✅ منتظر شروع بمون.")
         else:
             await q.answer("قبلاً ثبت‌نام کردی 😉")
+            return True  # تعداد عوض نشده؛ چیزی برای redraw نیست
+        now = time.time()
+        if now - _join_edit_at.get(session_id, 0) < 2.0:
+            return True  # ضداسپم: جوین بعدی صفحه رو به‌روز می‌کنه
+        _join_edit_at[session_id] = now
         quiz = db.get_quiz(session["quiz_id"])
-        count = db.count_participants(session_id)
-        try:
-            await q.edit_message_text(_intro_text(quiz, count), reply_markup=kb.join_kb(session_id))
-        except BadRequest as e:
-            if "not modified" not in str(e).lower():
-                raise
+        await _edit_intro(context, session, quiz, db.count_participants(session_id))
         return True
 
     if data.startswith("go:"):

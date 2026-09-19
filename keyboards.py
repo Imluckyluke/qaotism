@@ -61,6 +61,7 @@ def quiz_detail_kb(quiz_id):
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("✏️ ویرایش آزمون", callback_data=f"qedit:{quiz_id}")],
+            [InlineKeyboardButton("📋 کپی آزمون", callback_data=f"qclone:{quiz_id}")],
             [InlineKeyboardButton("🗑 حذف آزمون", callback_data=f"qdel:{quiz_id}")],
             [InlineKeyboardButton("🔙 بازگشت به لیست", callback_data="mk_list")],
         ]

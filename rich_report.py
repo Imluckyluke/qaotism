@@ -13,10 +13,12 @@ import html
 import logging
 
 import database as db
+from config import MEMBERS_CALL_NAME
 
 logger = logging.getLogger(__name__)
 
 MAX_RICH_HTML = 25_000
+MAX_COMBINED_RICH_HTML = 30_000
 
 _MEDALS = {0: "🥇", 1: "🥈", 2: "🥉"}
 
@@ -140,6 +142,84 @@ def sample_rich_html() -> str:
     )
 
 
+# ---------------- Rich builders for bot screens ----------------
+
+def panel_home_html() -> str:
+    return (
+        "<h1>🎛 پنل مدیریت آزمون</h1>"
+        f"<p>سلام {MEMBERS_CALL_NAME}! 👋<br/>از دکمه‌های زیر استفاده کن.</p>"
+    )
+
+
+def quiz_list_html(quizzes) -> str:
+    rows = []
+    for r in quizzes:
+        rows.append(
+            f"<tr><td>{_esc(_short(r['name'], 120))}</td><td>{r['qcount']} سوال</td></tr>"
+        )
+    return (
+        "<h1>📋 لیست آزمون‌ها</h1>"
+        "<table bordered striped>"
+        "<tr><th>آزمون</th><th>تعداد سوال</th></tr>"
+        + "".join(rows)
+        + "</table>"
+    )
+
+
+def quiz_detail_html(quiz, questions) -> str:
+    rows = []
+    for i, qs in enumerate(questions, 1):
+        opts = qs["options"]
+        correct = opts[qs["correct_option"]] if 0 <= qs["correct_option"] < len(opts) else "—"
+        rows.append(
+            f"<tr><td>{i}</td><td>{_esc(_short(qs['text'], 150))}</td>"
+            f"<td>{len(opts)} گزینه</td><td>{_esc(_short(correct, 80))}</td></tr>"
+        )
+    body = (
+        f"<h1>📝 {_esc(_short(quiz['name'], 150))}</h1>"
+        f"<p>تعداد سوالات: <b>{len(questions)}</b></p>"
+    )
+    if rows:
+        body += (
+            "<table bordered striped>"
+            "<tr><th>#</th><th>سوال</th><th>گزینه‌ها</th><th>جواب درست</th></tr>"
+            + "".join(rows)
+            + "</table>"
+        )
+    else:
+        body += "<p>هنوز سوالی نداره.</p>"
+    return body
+
+
+def intro_html(quiz_name, count, limit_text, min_points, max_points) -> str:
+    return (
+        f"<h1>🎯 آزمون: {_esc(_short(quiz_name, 150))}</h1>"
+        f"<p>{MEMBERS_CALL_NAME}، هرکی می‌خواد شرکت کنه دکمه‌ی «من یک اوتیسمی پایه هستم» رو بزنه 🙋</p>"
+        "<table bordered striped>"
+        f"<tr><td>⏱ وقت هر سوال</td><td>{_esc(limit_text)}</td></tr>"
+        f"<tr><td>⚡️ امتیاز جواب درست</td><td>{min_points} تا {max_points} (هرچی سریع‌تر، بیشتر)</td></tr>"
+        f"<tr><td>👥 شرکت‌کننده‌ها</td><td>{count} نفر</td></tr>"
+        "</table>"
+        "<blockquote>⚠️ بعد از شروع، دیگه کسی نمی‌تونه اضافه بشه.</blockquote>"
+    )
+
+
+def question_html(qdata, q_index, total, limit_text, participants, answered) -> str:
+    opts = []
+    for i, opt in enumerate(qdata["options"]):
+        opts.append(f"<tr><td>{i + 1}</td><td>{_esc(_short(opt, 200))}</td></tr>")
+    return (
+        f"<h1>❓ سوال {q_index + 1} از {total}</h1>"
+        f"<p>⏱ مهلت پاسخ: {_esc(limit_text)}</p>"
+        f"<p><b>{_esc(_short(qdata['text'], 500))}</b></p>"
+        "<table bordered striped>"
+        "<tr><th>#</th><th>گزینه (برای جواب روی دکمه‌ها بزن)</th></tr>"
+        + "".join(opts)
+        + "</table>"
+        f"<p>👥 {participants} نفر شرکت‌کننده — {answered} نفر جواب دادن</p>"
+    )
+
+
 async def _api_post(bot_token: str, method: str, payload: dict) -> tuple:
     """Raw Bot API POST. Returns (True, data) or (False, reason)."""
     url = f"https://api.telegram.org/bot{bot_token}/{method}"
@@ -190,26 +270,69 @@ async def _api_post(bot_token: str, method: str, payload: dict) -> tuple:
         return False, f"transport error: {e}"
 
 
-async def edit_rich_inline(bot_token: str, inline_message_id: str, html: str) -> tuple:
-    """Edits an inline-sent message to a Rich Message via editMessageText.
+async def try_edit_rich(
+    bot_token: str,
+    html: str,
+    *,
+    chat_id=None,
+    message_id=None,
+    inline_message_id=None,
+    reply_markup_dict=None,
+) -> tuple:
+    """Edits a message to Rich via editMessageText. Returns (True, "") or (False, reason).
 
-    Used for quiz sessions started through inline mode (no chat_id known).
-    Buttons are cleared with an empty keyboard. Returns (True, "") or (False, reason).
+    Either (chat_id + message_id) or inline_message_id must be given.
+    reply_markup_dict (already .to_dict()) is attached when given;
+    pass {"inline_keyboard": []} to explicitly clear buttons.
     """
-    if not html or not bot_token or not inline_message_id:
+    if not html or not bot_token or (not inline_message_id and (chat_id is None or message_id is None)):
         return False, "missing params"
-    ok, data = await _api_post(
-        bot_token,
-        "editMessageText",
-        {
-            "inline_message_id": inline_message_id,
-            "rich_message": {"html": html, "is_rtl": True},
-            "reply_markup": {"inline_keyboard": []},
-        },
-    )
+    payload = {"rich_message": {"html": html, "is_rtl": True}}
+    if inline_message_id:
+        payload["inline_message_id"] = inline_message_id
+    else:
+        payload["chat_id"] = chat_id
+        payload["message_id"] = message_id
+    if reply_markup_dict is not None:
+        payload["reply_markup"] = reply_markup_dict
+    ok, data = await _api_post(bot_token, "editMessageText", payload)
     if not ok:
         logger.warning("editMessageText rich ناموفق بود: %s", data)
     return (True, "") if ok else (False, data)
+
+
+async def try_send_rich(
+    bot_token: str,
+    chat_id: int,
+    html: str,
+    *,
+    reply_markup_dict=None,
+    reply_to_message_id=None,
+) -> tuple:
+    """Sends one Rich message via sendRichMessage. Returns (True, "") or (False, reason)."""
+    if not html or not bot_token or chat_id is None:
+        return False, "missing params"
+    payload = {"chat_id": chat_id, "rich_message": {"html": html, "is_rtl": True}}
+    if reply_markup_dict is not None:
+        payload["reply_markup"] = reply_markup_dict
+    if reply_to_message_id:
+        payload["reply_parameters"] = {
+            "message_id": reply_to_message_id,
+            "allow_sending_without_reply": True,
+        }
+    ok, data = await _api_post(bot_token, "sendRichMessage", payload)
+    if not ok:
+        logger.warning("sendRichMessage ناموفق بود: %s", data)
+    return (True, "") if ok else (False, data)
+
+
+async def edit_rich_inline(bot_token: str, inline_message_id: str, html: str) -> tuple:
+    """Back-compat wrapper: rich-edit of an inline message, clearing buttons."""
+    return await try_edit_rich(
+        bot_token, html,
+        inline_message_id=inline_message_id,
+        reply_markup_dict={"inline_keyboard": []},
+    )
 
 
 async def send_rich_chunks(

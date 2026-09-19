@@ -298,6 +298,20 @@ def next_question_order(quiz_id: int) -> int:
         return (row["m"] if row else -1) + 1
 
 
+def duplicate_quiz(quiz_id: int, creator_id: int) -> int | None:
+    """Deep-copies a quiz with all questions/options. Returns new quiz id or None."""
+    quiz = get_quiz(quiz_id)
+    if not quiz:
+        return None
+    questions = get_questions(quiz_id)
+    new_id = create_quiz(f"{quiz['name']} (کپی)", creator_id)
+    for i, qu in enumerate(questions):
+        qid = add_question(new_id, qu["text"], i, qu["correct_option"])
+        for j, opt in enumerate(qu["options"]):
+            add_option(qid, opt, j)
+    return new_id
+
+
 # ---------------- Sessions ----------------
 
 def create_session(

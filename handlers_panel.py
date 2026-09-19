@@ -4,7 +4,7 @@ from telegram.ext import ContextTypes
 import database as db
 import keyboards as kb
 import rich_report
-from config import BOT_TOKEN, MEMBERS_CALL_NAME, PANEL_TITLE
+from config import BOT_TOKEN, MEMBERS_CALL_NAME, PANEL_TITLE, RICH_RESULTS
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -30,6 +30,17 @@ async def panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔️ فقط ادمین‌ها به این پنل دسترسی دارن.")
         return
     context.user_data.clear()
+    if RICH_RESULTS and BOT_TOKEN:
+        try:
+            ok, _ = await rich_report.try_send_rich(
+                BOT_TOKEN, update.effective_chat.id,
+                rich_report.panel_home_html(),
+                reply_markup_dict=kb.main_panel_kb(db.is_owner(uid)).to_dict(),
+            )
+            if ok:
+                return
+        except Exception:
+            pass
     await update.message.reply_text(
         PANEL_TITLE, reply_markup=kb.main_panel_kb(db.is_owner(uid))
     )
@@ -78,6 +89,22 @@ async def addadmin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("این کاربر از قبل ادمین بود.")
 
 
+async def _show_quiz_list(q, rows):
+    """Quiz list: rich table first, plain fallback."""
+    if RICH_RESULTS and BOT_TOKEN and q.message is not None:
+        try:
+            ok, _ = await rich_report.try_edit_rich(
+                BOT_TOKEN, rich_report.quiz_list_html(rows),
+                chat_id=q.message.chat.id, message_id=q.message.message_id,
+                reply_markup_dict=kb.quiz_list_kb(rows).to_dict(),
+            )
+            if ok:
+                return
+        except Exception:
+            pass
+    await q.edit_message_text("📋 لیست آزمون‌ها:", reply_markup=kb.quiz_list_kb(rows))
+
+
 async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles all callback_data used by the admin panel (prefix-based)."""
     q = update.callback_query
@@ -96,6 +123,17 @@ async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "mk_panel":
         context.user_data.clear()
         await q.answer()
+        if RICH_RESULTS and BOT_TOKEN and q.message is not None:
+            try:
+                ok, _ = await rich_report.try_edit_rich(
+                    BOT_TOKEN, rich_report.panel_home_html(),
+                    chat_id=q.message.chat.id, message_id=q.message.message_id,
+                    reply_markup_dict=kb.main_panel_kb(db.is_owner(uid)).to_dict(),
+                )
+                if ok:
+                    return
+            except Exception:
+                pass
         await q.edit_message_text(
             PANEL_TITLE, reply_markup=kb.main_panel_kb(db.is_owner(uid))
         )
@@ -109,7 +147,17 @@ async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "هنوز هیچ آزمونی ساخته نشده.", reply_markup=kb.back_close_kb()
             )
             return
-        await q.edit_message_text("📋 لیست آزمون‌ها:", reply_markup=kb.quiz_list_kb(rows))
+        await _show_quiz_list(q, rows)
+        return
+
+    if data.startswith("qclone:"):
+        quiz_id = int(data.split(":")[1])
+        new_id = db.duplicate_quiz(quiz_id, uid)
+        if not new_id:
+            await q.answer("این آزمون دیگه وجود نداره.", show_alert=True)
+            return
+        await q.answer("کپی شد ✅")
+        await _show_quiz_list(q, db.list_quizzes())
         return
 
     if data.startswith("qv:"):
@@ -120,6 +168,17 @@ async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("این آزمون دیگه وجود نداره.", reply_markup=kb.back_close_kb("mk_list"))
             return
         questions = db.get_questions(quiz_id)
+        if RICH_RESULTS and BOT_TOKEN and q.message is not None:
+            try:
+                ok, _ = await rich_report.try_edit_rich(
+                    BOT_TOKEN, rich_report.quiz_detail_html(quiz, questions),
+                    chat_id=q.message.chat.id, message_id=q.message.message_id,
+                    reply_markup_dict=kb.quiz_detail_kb(quiz_id).to_dict(),
+                )
+                if ok:
+                    return
+            except Exception:
+                pass
         lines = [f"📝 آزمون: {quiz['name']}", f"تعداد سوالات: {len(questions)}", ""]
         for i, qs in enumerate(questions, 1):
             lines.append(f"{i}. {qs['text']} ({len(qs['options'])} گزینه)")
